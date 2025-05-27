@@ -1,7 +1,7 @@
-tflite-runtime==2.14.0
-Flask
+flask
 flask-cors
-librosa
 numpy
 pandas
+librosa
+tflite-runtime
 gunicorn

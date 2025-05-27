@@ -10,12 +10,16 @@ import tflite_runtime.interpreter as tflite
 app = Flask(__name__)
 CORS(app)
 
+# Base directory of the current file
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # Load class names
-class_map_path = 'yamnet_class_map.csv'
+class_map_path = os.path.join(BASE_DIR, 'yamnet_class_map.csv')
 class_names = pd.read_csv(class_map_path)['display_name'].tolist()
 
 # Load TFLite model
-interpreter = tflite.Interpreter(model_path="yamnet.tflite")
+model_path = os.path.join(BASE_DIR, 'yamnet.tflite')
+interpreter = tflite.Interpreter(model_path=model_path)
 interpreter.allocate_tensors()
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
@@ -62,7 +66,7 @@ def predict():
             return jsonify({'error': 'No audio file provided'}), 400
 
         file = request.files['audio']
-        temp_path = 'temp.wav'
+        temp_path = os.path.join(BASE_DIR, 'temp.wav')
         file.save(temp_path)
 
         waveform = load_audio(temp_path)
