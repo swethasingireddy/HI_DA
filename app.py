@@ -1,78 +1,87 @@
-import numpy as np
-import soundfile as sf
 from flask import Flask, request, jsonify
-from scipy.signal import resample
-import io
-import json
+from flask_cors import CORS
+import numpy as np
+import librosa
 import os
-
-from tflite_runtime.interpreter import Interpreter
+import pandas as pd
+import traceback
+import tflite_runtime.interpreter as tflite
 
 app = Flask(__name__)
+CORS(app)
 
-# Load TFLite model and allocate tensors
-interpreter = Interpreter(model_path="yamnet.tflite")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Load class names
+class_map_path = os.path.join(BASE_DIR, 'yamnet_class_map.csv')
+class_names = pd.read_csv(class_map_path)['display_name'].tolist()
+
+# Load TFLite model
+model_path = os.path.join(BASE_DIR, 'yamnet.tflite')
+interpreter = tflite.Interpreter(model_path=model_path)
 interpreter.allocate_tensors()
+input_details = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
 
-# Load class labels
-with open("class_map.json", "r") as f:
-    class_map = json.load(f)
+# Risk categories
+hazardous_classes = {
+    11, 102, 181, 280, 281, 307, 316, 317, 318,
+    319, 390, 393, 394, 420, 421, 422, 423, 424, 428, 429
+}
+semi_immediate_classes = {302, 312}
 
-# Helper function: resample to 16kHz mono
-def preprocess_audio(audio_bytes):
-    waveform, sr = sf.read(io.BytesIO(audio_bytes), dtype="float32")
-    
-    # Convert stereo to mono if needed
-    if len(waveform.shape) == 2:
-        waveform = np.mean(waveform, axis=1)
+# Audio preprocessing
+SAMPLE_RATE = 16000
+CHUNK_DURATION = 0.975  # seconds
+CHUNK_SAMPLES = int(SAMPLE_RATE * CHUNK_DURATION)
 
-    # Resample if sample rate isn't 16000
-    if sr != 16000:
-        num_samples = int(len(waveform) * 16000 / sr)
-        waveform = resample(waveform, num_samples)
+def load_audio(file_path):
+    waveform, sr = librosa.load(file_path, sr=SAMPLE_RATE, mono=True)
+    return waveform
 
-    return waveform.astype(np.float32)
+def classify_audio(waveform):
+    # Pad or trim to 0.975s
+    if len(waveform) < CHUNK_SAMPLES:
+        waveform = np.pad(waveform, (0, CHUNK_SAMPLES - len(waveform)), mode='constant')
+    else:
+        waveform = waveform[:CHUNK_SAMPLES]
+
+    # Reshape for TFLite input: [1, num_samples]
+    input_tensor = np.expand_dims(waveform.astype(np.float32), axis=0)
+
+    interpreter.set_tensor(input_details[0]['index'], input_tensor)
+    interpreter.invoke()
+
+    output_data = interpreter.get_tensor(output_details[0]['index'])[0]
+    top_class = int(np.argmax(output_data))
+
+    prediction = {
+        'class_name': class_names[top_class],
+        'score': round(float(output_data[top_class]), 4),
+        'hazardous': top_class in hazardous_classes,
+        'semi_immediate': top_class in semi_immediate_classes
+    }
+    return prediction
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    if 'audio' not in request.files:
-        return jsonify({'error': 'No audio file uploaded'}), 400
-
-    file = request.files['audio']
-    audio_bytes = file.read()
-
     try:
-        waveform = preprocess_audio(audio_bytes)
+        if 'audio' not in request.files:
+            return jsonify({'error': 'No audio file provided'}), 400
 
-        # Prepare model input
-        input_details = interpreter.get_input_details()
-        input_shape = input_details[0]['shape']
+        file = request.files['audio']
+        temp_path = os.path.join(BASE_DIR, 'temp.wav')
+        file.save(temp_path)
 
-        if len(input_shape) == 2:
-            # [1, 16000] — add batch dimension
-            input_tensor = np.expand_dims(waveform, axis=0).astype(np.float32)
-        else:
-            # [16000] — 1D expected
-            input_tensor = waveform.astype(np.float32)
+        waveform = load_audio(temp_path)
+        os.remove(temp_path)
 
-        interpreter.set_tensor(input_details[0]['index'], input_tensor)
-        interpreter.invoke()
-
-        # Get predictions
-        output_details = interpreter.get_output_details()
-        output_data = interpreter.get_tensor(output_details[0]['index'])[0]
-
-        predicted_index = int(np.argmax(output_data))
-        predicted_label = class_map.get(str(predicted_index), "Unknown")
-
-        return jsonify({
-            'class_id': predicted_index,
-            'class_label': predicted_label
-        })
+        prediction = classify_audio(waveform)
+        return jsonify({'predictions': [prediction]})
 
     except Exception as e:
+        traceback.print_exc()
         return jsonify({'error': f'Prediction error: {str(e)}'}), 500
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=5001)

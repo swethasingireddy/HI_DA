@@ -5,5 +5,4 @@ librosa
 numpy==1.24.3
 pandas
 gunicorn
-soundfile==0.12.1
-scipy==1.10.1
+
