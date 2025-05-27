@@ -2,6 +2,6 @@ tflite-runtime==2.14.0
 Flask
 flask-cors
 librosa
-numpy
+numpy==1.24.3
 pandas
 gunicorn
