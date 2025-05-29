@@ -10,7 +10,6 @@ import tflite_runtime.interpreter as tflite
 app = Flask(__name__)
 CORS(app)
 
-# Base directory of the current file
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Load class names
@@ -24,7 +23,6 @@ interpreter.allocate_tensors()
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 
-# Sound categories
 hazardous_classes = {
     11, 102, 181, 280, 281, 307, 316, 317, 318,
     319, 390, 393, 394, 420, 421, 422, 423, 424, 428, 429
@@ -32,12 +30,15 @@ hazardous_classes = {
 semi_immediate_classes = {302, 312}
 
 SAMPLE_RATE = 16000
-CHUNK_DURATION = 0.975  # YAMNet expects ~0.975 sec chunks
+CHUNK_DURATION = 2.0
 CHUNK_SAMPLES = int(SAMPLE_RATE * CHUNK_DURATION)
 
 def load_audio(file_path):
-    waveform, sr = librosa.load(file_path, sr=SAMPLE_RATE, mono=True)
-    return waveform
+    try:
+        waveform, sr = librosa.load(file_path, sr=SAMPLE_RATE, mono=True)
+        return waveform
+    except Exception as e:
+        raise ValueError(f"librosa failed to load audio: {e}")
 
 def classify_audio(waveform):
     if len(waveform) < CHUNK_SAMPLES:
@@ -76,10 +77,16 @@ def predict():
         temp_path = os.path.join(BASE_DIR, 'temp.wav')
         file.save(temp_path)
 
+        if not os.path.exists(temp_path) or os.path.getsize(temp_path) == 0:
+            return jsonify({'error': 'Uploaded file is empty or missing'}), 400
+
+        print(f"[INFO] Received file: {file.filename} - Saved at: {temp_path}")
+
         waveform = load_audio(temp_path)
+        prediction = classify_audio(waveform)
+
         os.remove(temp_path)
 
-        prediction = classify_audio(waveform)
         return jsonify({'predictions': [prediction]})
 
     except Exception as e:
