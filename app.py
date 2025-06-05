@@ -10,41 +10,43 @@ import tflite_runtime.interpreter as tflite
 app = Flask(__name__)
 CORS(app)
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+base_dir = os.path.dirname(os.path.abspath(__file__))
 
-# Load class names
-class_map_path = os.path.join(BASE_DIR, 'yamnet_class_map.csv')
+# Loading class names
+class_map_path = os.path.join(base_dir, 'yamnet_class_map.csv')
 class_names = pd.read_csv(class_map_path)['display_name'].tolist()
 
-# Load TFLite model
-model_path = os.path.join(BASE_DIR, 'yamnet.tflite')
+# Loading TFLite model
+model_path = os.path.join(base_dir, 'yamnet.tflite')
 interpreter = tflite.Interpreter(model_path=model_path)
 interpreter.allocate_tensors()
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 
+# Hazardous classification indices (from YAMNet)
 hazardous_classes = {
     11, 102, 181, 280, 281, 307, 316, 317, 318,
     319, 390, 393, 394, 420, 421, 422, 423, 424, 428, 429
 }
-semi_immediate_classes = {302, 312}
+# Semi Hazardous classification indices (from YAMNet)
+semi_hazardous_classes = {302, 312}
 
-SAMPLE_RATE = 16000
-CHUNK_DURATION = 2.0
-CHUNK_SAMPLES = int(SAMPLE_RATE * CHUNK_DURATION)
+sampleRate = 16000
+chunkDuration = 2.0
+chunkSamples = int(sampleRate * chunkDuration)
 
 def load_audio(file_path):
     try:
-        waveform, sr = librosa.load(file_path, sr=SAMPLE_RATE, mono=True)
+        waveform, sr = librosa.load(file_path, sr=sampleRate, mono=True) # Loading and resampling audio
         return waveform
     except Exception as e:
         raise ValueError(f"librosa failed to load audio: {e}")
 
 def classify_audio(waveform):
-    if len(waveform) < CHUNK_SAMPLES:
-        waveform = np.pad(waveform, (0, CHUNK_SAMPLES - len(waveform)), mode='constant')
+    if len(waveform) < chunkSamples:
+        waveform = np.pad(waveform, (0, chunkSamples - len(waveform)), mode='constant')
     else:
-        waveform = waveform[:CHUNK_SAMPLES]
+        waveform = waveform[:chunkSamples]
 
     input_tensor = np.array(waveform, dtype=np.float32)
 
@@ -63,10 +65,10 @@ def classify_audio(waveform):
         'class_name': class_names[top_class],
         'score': round(float(output_data[top_class]), 4),
         'hazardous': top_class in hazardous_classes,
-        'semi_immediate': top_class in semi_immediate_classes
+        'semi_hazardous': top_class in semi_hazardous_classes
     }
     return prediction
-
+#API endpoint to classify audio
 @app.route('/predict', methods=['POST'])
 def predict():
     try:
@@ -74,13 +76,13 @@ def predict():
             return jsonify({'error': 'No audio file provided'}), 400
 
         file = request.files['audio']
-        temp_path = os.path.join(BASE_DIR, 'temp.wav')
+        temp_path = os.path.join(base_dir, 'temp.wav')
         file.save(temp_path)
 
         if not os.path.exists(temp_path) or os.path.getsize(temp_path) == 0:
-            return jsonify({'error': 'Uploaded file is empty or missing'}), 400
+            return jsonify({'error': 'Uploaded file is empty'}), 400
 
-        print(f"[INFO] Received file: {file.filename} - Saved at: {temp_path}")
+        print(f"Received file: {file.filename} Saved at: {temp_path}")
 
         waveform = load_audio(temp_path)
         prediction = classify_audio(waveform)
